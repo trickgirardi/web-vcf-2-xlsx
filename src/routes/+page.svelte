@@ -2,18 +2,15 @@
 	import { SiGithub } from '@icons-pack/svelte-simple-icons';
 	import DuplicateList from '$lib/components/DuplicateList.svelte';
 	import ProcessingSummary from '$lib/components/ProcessingSummary.svelte';
-	import { processFiles, type FileInput, type ProcessFilesResult } from '$lib/vcard/process-files';
-	import { buildExport, downloadBlob } from '$lib/xlsx/exporter';
+	import ProgressBar from '$lib/components/ProgressBar.svelte';
+	import { ConverterClient, JobCancelledError, type Job } from '$lib/workers/converter-client';
+	import type { ConversionProgress, ProcessedFiles } from '$lib/workers/protocol';
+	import { downloadBlob } from '$lib/xlsx/download';
 	import { ALL_CONTACT_FIELDS } from '$lib/xlsx/types';
 
 	interface SelectedFile {
 		id: string;
 		file: File;
-	}
-
-	interface FileReadError {
-		name: string;
-		message: string;
 	}
 
 	type RejectionReason = 'invalid-extension' | 'empty-file';
@@ -32,11 +29,23 @@
 	let rejectedFiles = $state<RejectedFile[]>([]);
 	let fileInput = $state<HTMLInputElement>();
 
+	// Todo o trabalho pesado (leitura, parsing, deduplicação, geração do XLSX)
+	// roda em um Web Worker; aqui só orquestramos e exibimos o estado.
+	const converter = new ConverterClient();
+	$effect(() => () => converter.dispose());
+
 	let processing = $state(false);
-	let result = $state<ProcessFilesResult | null>(null);
-	let readErrors = $state<FileReadError[]>([]);
+	let progress = $state.raw<ConversionProgress | null>(null);
+	let processingJob: Job<ProcessedFiles> | null = null;
+	let processError = $state<string | null>(null);
+	// `.raw`: o resultado é só lido, e proxies do $state não podem ser
+	// enviados ao worker (structured clone).
+	let result = $state.raw<ProcessedFiles | null>(null);
 	let showDuplicates = $state(false);
 	let exporting = $state(false);
+	let exportError = $state<string | null>(null);
+
+	let readErrors = $derived(result?.readErrors ?? []);
 
 	// Um arquivo inválido não impede o processamento dos demais: cada
 	// arquivo é aceito/rejeitado de forma independente.
@@ -85,62 +94,60 @@
 
 	function clearResult() {
 		result = null;
-		readErrors = [];
+		processError = null;
+		exportError = null;
 		showDuplicates = false;
 	}
 
-	type ReadOutcome = { ok: true; input: FileInput } | ({ ok: false } & FileReadError);
-
-	function isOk(outcome: ReadOutcome): outcome is { ok: true; input: FileInput } {
-		return outcome.ok;
-	}
-
-	async function readFile({ id, file }: SelectedFile): Promise<ReadOutcome> {
-		try {
-			const text = await file.text();
-			return { ok: true, input: { id, name: file.name, text } };
-		} catch (error) {
-			return {
-				ok: false,
-				name: file.name,
-				message: error instanceof Error ? error.message : String(error)
-			};
-		}
+	function errorMessage(error: unknown) {
+		return error instanceof Error ? error.message : String(error);
 	}
 
 	async function handleProcess() {
-		if (selectedFiles.length === 0 || processing) return;
+		if (selectedFiles.length === 0 || processing || exporting) return;
 
 		processing = true;
+		progress = null;
 		clearResult();
 
-		// Promise.all preserva a correspondência de índice com selectedFiles
-		// mesmo que as leituras terminem fora de ordem — importante porque a
-		// deduplicação depende da ordem em que os contatos chegam (primeira
-		// ocorrência é a mantida).
-		const settled = await Promise.all(selectedFiles.map(readFile));
+		// A ordem dos arquivos selecionados é preservada pelo worker — importante
+		// porque a deduplicação mantém a primeira ocorrência.
+		const job = converter.process(
+			selectedFiles.map(({ id, file }) => ({ id, file })),
+			(update) => (progress = update)
+		);
+		processingJob = job;
 
-		const inputs: FileInput[] = [];
-		const failures: FileReadError[] = [];
-		for (const entry of settled) {
-			if (isOk(entry)) inputs.push(entry.input);
-			else failures.push(entry);
+		try {
+			result = await job.promise;
+		} catch (error) {
+			if (!(error instanceof JobCancelledError)) processError = errorMessage(error);
+		} finally {
+			processingJob = null;
+			processing = false;
 		}
-
-		readErrors = failures;
-		result = processFiles(inputs);
-		processing = false;
 	}
 
-	// Sem seletor de colunas/modo ainda (Etapas 8-10): exporta todos os
-	// campos consolidados em uma única sheet até essa UI existir.
+	function handleCancel() {
+		processingJob?.cancel();
+	}
+
+	// Sem seletor de colunas/modo ainda: exporta todos os campos consolidados
+	// em uma única sheet até essa UI existir.
 	async function handleExport() {
-		if (!result || result.contacts.length === 0 || exporting) return;
+		if (!result || result.contacts.length === 0 || exporting || processing) return;
 
 		exporting = true;
+		exportError = null;
 		try {
-			const exportResult = await buildExport(result.contacts, ALL_CONTACT_FIELDS, 'single-sheet');
+			const exportResult = await converter.export(
+				result.contacts,
+				ALL_CONTACT_FIELDS,
+				'single-sheet'
+			).promise;
 			downloadBlob(exportResult);
+		} catch (error) {
+			exportError = `Não foi possível gerar o XLSX: ${errorMessage(error)}`;
 		} finally {
 			exporting = false;
 		}
@@ -276,13 +283,23 @@
 					<button
 						type="button"
 						class="w-full rounded-md bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-50"
-						disabled={processing}
+						disabled={processing || exporting}
 						onclick={handleProcess}
 					>
 						{processing ? 'Processando…' : 'Processar arquivos'}
 					</button>
+
+					{#if processing}
+						<ProgressBar {progress} onCancel={handleCancel} />
+					{/if}
 				{/if}
 			</section>
+
+			{#if processError}
+				<p class="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+					Não foi possível processar os arquivos: {processError}
+				</p>
+			{/if}
 
 			{#if readErrors.length > 0}
 				<p class="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
@@ -353,6 +370,13 @@
 					>
 						{exporting ? 'Gerando XLSX…' : 'Baixar XLSX'}
 					</button>
+					{#if exportError}
+						<p
+							class="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200"
+						>
+							{exportError}
+						</p>
+					{/if}
 					<p class="text-center text-xs text-zinc-500">
 						Exporta todos os campos em uma única planilha. Seleção de colunas e modos de exportação
 						chegam nas próximas etapas.

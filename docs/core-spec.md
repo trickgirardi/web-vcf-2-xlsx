@@ -20,12 +20,12 @@ Aplicação web que converte um ou vários arquivos de contatos **VCF (vCard)** 
 
 Já implementado e testado (32 testes unitários passando):
 
-| Área          | O que existe                                                                                          |
-| ------------- | ----------------------------------------------------------------------------------------------------- |
-| Parsing       | VCF 2.1/3.0/4.0 → `Contact`; cada vCard é parseado isoladamente (um inválido não derruba o arquivo)  |
-| Deduplicação  | Por telefone normalizado (só dígitos), mantém a primeira ocorrência, registra as removidas            |
-| Exportação    | 3 modos (`single-sheet`, `sheet-per-file`, `workbook-per-file`), todos os campos, colunas numeradas   |
-| UI            | Seleção de arquivos, resumo do processamento, lista de duplicatas (somente leitura), download XLSX    |
+| Área         | O que existe                                                                                        |
+| ------------ | --------------------------------------------------------------------------------------------------- |
+| Parsing      | VCF 2.1/3.0/4.0 → `Contact`; cada vCard é parseado isoladamente (um inválido não derruba o arquivo) |
+| Deduplicação | Por telefone normalizado (só dígitos), mantém a primeira ocorrência, registra as removidas          |
+| Exportação   | 3 modos (`single-sheet`, `sheet-per-file`, `workbook-per-file`), todos os campos, colunas numeradas |
+| UI           | Seleção de arquivos, resumo do processamento, lista de duplicatas (somente leitura), download XLSX  |
 
 Lacunas que a v1 fecha: modo de exportação não selecionável na UI, revisão de duplicatas passiva, processamento na thread principal, sem progresso, sem drag & drop, README e resíduos do template.
 
@@ -47,11 +47,11 @@ Lacunas que a v1 fecha: modo de exportação não selecionável na UI, revisão 
 
 O usuário escolhe, antes de baixar, o modo de saída:
 
-| Modo                | Resultado                                                                 |
-| ------------------- | ------------------------------------------------------------------------- |
-| Planilha única      | Todos os contatos únicos em uma sheet (`contatos.xlsx`)                   |
-| Uma aba por arquivo | Um workbook, uma sheet por VCF de origem                                  |
-| Um XLSX por arquivo | Um XLSX por VCF; `.zip` se houver mais de um                              |
+| Modo                | Resultado                                               |
+| ------------------- | ------------------------------------------------------- |
+| Planilha única      | Todos os contatos únicos em uma sheet (`contatos.xlsx`) |
+| Uma aba por arquivo | Um workbook, uma sheet por VCF de origem                |
+| Um XLSX por arquivo | Um XLSX por VCF; `.zip` se houver mais de um            |
 
 A lógica já existe em [exporter.ts](../src/lib/xlsx/exporter.ts); a v1 entrega o **seletor na UI** e o estado de exportação (loading + erro).
 
@@ -86,6 +86,13 @@ A lógica já existe em [exporter.ts](../src/lib/xlsx/exporter.ts); a v1 entrega
 - O resultado do worker é idêntico ao de `processFiles` chamado diretamente (teste de paridade).
 - Erros dentro do worker chegam à UI como mensagem, sem travar o estado "processando".
 
+**Status: implementado.**
+
+- Código em [src/lib/workers/](../src/lib/workers/): `protocol.ts` (mensagens tipadas), `handler.ts` (lógica testável em Node), `converter.worker.ts` (casca do worker) e `converter-client.ts` (`ConverterClient`, usado pela UI).
+- O worker lê os `File`s, faz parsing, deduplica e também **gera o XLSX/ZIP**. Com isso o `exceljs` fica fora do bundle da página (chunk da página: ~16 KB; bundle do worker: ~1 MB / ~282 KB gzip, carregado só ao processar).
+- Progresso em 3 fases (leitura 0–5 %, parsing 5–95 % ponderado pelo tamanho dos arquivos, deduplicação 95–100 %). Cancelar termina o worker; o próximo job cria um novo.
+- Verificado com 40 mil contatos no build de produção rodando no `wrangler dev`: a thread principal não travou (maior intervalo entre frames de ~60 ms), o resumo e o XLSX saíram corretos e o cancelamento voltou ao estado inicial.
+
 ### 3.5 Drag & drop
 
 - Área de upload aceita arquivos soltos, além do seletor atual, com estado visual de "arrastando sobre".
@@ -109,25 +116,25 @@ Conteúdo mínimo: o que o app faz, a promessa de privacidade, como rodar (`pnpm
 
 Avaliar **antes de investir em novas features de exportação**, com um spike curto.
 
-| Critério               | `xlsx` (SheetJS 0.18.5 no npm)                                                                  | `exceljs`                                                         |
-| ---------------------- | ----------------------------------------------------------------------------------------------- | ----------------------------------------------------------------- |
-| Manutenção             | A versão do npm está congelada; versões novas só saem pelo CDN da SheetJS                       | Publicada no npm, mantida de forma irregular                      |
-| Segurança              | Advisories conhecidos em versões antigas, relativos a **leitura** de arquivos não confiáveis     | Sem o mesmo histórico, mas com dependências próprias a auditar    |
-| Uso no app (hoje)      | Só **escrita** de XLSX, o que reduz a exposição                                                  | Cobre escrita com estilos, larguras de coluna, formatação de célula |
-| Tamanho do bundle      | Menor                                                                                           | Maior (medir; relevante para carregar no worker)                  |
-| Caminho inverso (futuro) | Exigiria **ler** XLSX do usuário: aqui as vulnerabilidades passam a importar                  | Também lê XLSX                                                    |
+| Critério                 | `xlsx` (SheetJS 0.18.5 no npm)                                                               | `exceljs`                                                           |
+| ------------------------ | -------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| Manutenção               | A versão do npm está congelada; versões novas só saem pelo CDN da SheetJS                    | Publicada no npm, mantida de forma irregular                        |
+| Segurança                | Advisories conhecidos em versões antigas, relativos a **leitura** de arquivos não confiáveis | Sem o mesmo histórico, mas com dependências próprias a auditar      |
+| Uso no app (hoje)        | Só **escrita** de XLSX, o que reduz a exposição                                              | Cobre escrita com estilos, larguras de coluna, formatação de célula |
+| Tamanho do bundle        | Menor                                                                                        | Maior (medir; relevante para carregar no worker)                    |
+| Caminho inverso (futuro) | Exigiria **ler** XLSX do usuário: aqui as vulnerabilidades passam a importar                 | Também lê XLSX                                                      |
 
 **Resultado do spike (2026-10-14, branch `spike/exceljs`, medido em Node 24; não foi testado em navegador nem dentro de um Worker):**
 
-| Medida                                | `xlsx` 0.18.5               | `exceljs` 4.4.0              |
-| ------------------------------------- | --------------------------- | ---------------------------- |
-| Suíte de exportação (3 modos, texto)  | 19/19 (referência)          | 19/19 (mesmos testes)        |
-| 10 mil contatos, planilha única       | ~220–270 ms                 | ~345 ms                      |
-| 50 mil contatos, planilha única       | ~1,2 s                      | ~1,6 s                       |
-| Tamanho do arquivo, 50 mil contatos   | 18 MB (sem compressão)      | 2 MB                         |
-| Idem, `xlsx` com `compression: true`  | 4,3 MB                      | 2 MB                         |
-| Bundle do cliente (gzip)              | ~157 KB total (chunk 126 KB) | ~316 KB total (chunk 285 KB) |
-| `pnpm audit --prod`                   | 2 *high* (prototype pollution e ReDoS do `xlsx`) | +1 *moderate* (`uuid`, via `exceljs`) |
+| Medida                               | `xlsx` 0.18.5                                    | `exceljs` 4.4.0                       |
+| ------------------------------------ | ------------------------------------------------ | ------------------------------------- |
+| Suíte de exportação (3 modos, texto) | 19/19 (referência)                               | 19/19 (mesmos testes)                 |
+| 10 mil contatos, planilha única      | ~220–270 ms                                      | ~345 ms                               |
+| 50 mil contatos, planilha única      | ~1,2 s                                           | ~1,6 s                                |
+| Tamanho do arquivo, 50 mil contatos  | 18 MB (sem compressão)                           | 2 MB                                  |
+| Idem, `xlsx` com `compression: true` | 4,3 MB                                           | 2 MB                                  |
+| Bundle do cliente (gzip)             | ~157 KB total (chunk 126 KB)                     | ~316 KB total (chunk 285 KB)          |
+| `pnpm audit --prod`                  | 2 _high_ (prototype pollution e ReDoS do `xlsx`) | +1 _moderate_ (`uuid`, via `exceljs`) |
 
 Observações:
 
@@ -135,33 +142,33 @@ Observações:
 - O `exceljs` publicou a última versão (4.4.0) em out/2023, então também está sem releases novas.
 - O `xlsx` atual grava **sem compressão** por padrão. Ligar `compression: true` em [exporter.ts](../src/lib/xlsx/exporter.ts) reduz o arquivo em ~4x, independentemente da decisão de troca.
 
-**Decisão:** migrar para `exceljs`. É a única opção que zera os *high* do `pnpm audit --prod` exigidos em 3.9 sem depender de tarball fora do npm. O custo é ~1,3x de tempo de geração e +~160 KB gzip no bundle, que carrega uma vez e, com o worker, não bloqueia a UI. Se o custo de bundle incomodar, a alternativa é o tarball oficial da SheetJS. Em ambos os casos a troca fica isolada em [xlsx/](../src/lib/xlsx/).
+**Decisão:** migrar para `exceljs`. É a única opção que zera os _high_ do `pnpm audit --prod` exigidos em 3.9 sem depender de tarball fora do npm. O custo é ~1,3x de tempo de geração e +~160 KB gzip no bundle, que carrega uma vez e, com o worker, não bloqueia a UI. Se o custo de bundle incomodar, a alternativa é o tarball oficial da SheetJS. Em ambos os casos a troca fica isolada em [xlsx/](../src/lib/xlsx/).
 
 **Migração aplicada (2026-10-14):**
 
 - [x] [exporter.ts](../src/lib/xlsx/exporter.ts) agora usa `exceljs` (mesma API; `buildExport` continua assíncrono). A suíte de exportação existente passa sem alterações.
 - [x] `xlsx` saiu das dependências de produção e ficou como devDependency, usado só pelos testes para ler o arquivo gerado (oráculo independente).
-- [x] O `pnpm audit --prod` não reporta mais vulnerabilidades do `xlsx`. Restam *high* em dependências transitivas do SvelteKit/Vite (`devalue`, `source-map-js`), a tratar em 3.9.
-- [ ] Validar o carregamento do `exceljs` dentro do Web Worker (3.4).
+- [x] O `pnpm audit --prod` não reporta mais vulnerabilidades do `xlsx`. Restam _high_ em dependências transitivas do SvelteKit/Vite (`devalue`, `source-map-js`), a tratar em 3.9.
+- [x] `exceljs` carrega e gera XLSX/ZIP dentro do Web Worker (validado em Chromium e no build de produção, ver 3.4).
 
 ### 3.9 Qualidade mínima da v1
 
 - `pnpm check`, `pnpm lint` e `pnpm test` passando em CI. O projeto "client" do vitest requer Chromium do Playwright instalado; documentar ou instalar no CI.
 - Testes unitários para: restauração de duplicatas, paridade do worker, validação de drag & drop (lógica extraída para função pura) e seleção de modo.
-- `pnpm audit --prod` sem vulnerabilidades *high* nas dependências de produção.
+- `pnpm audit --prod` sem vulnerabilidades _high_ nas dependências de produção.
 
 ## 4. Fora da v1 (melhorias futuras)
 
-| Item                          | Descrição                                                                                                       | Observação                                                              |
-| ----------------------------- | --------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Seleção de colunas            | Escolher quais campos exportar e a ordem                                                                        | `contactsToRows` já recebe `fields`; falta UI                           |
-| Deduplicação por e-mail/nome  | Critérios adicionais e configuráveis                                                                            | Definir como tratar falsos positivos (ex.: homônimos)                   |
-| Normalização com código de país | Tratar `47999999999` e `5547999999999` como o mesmo número                                                    | Provável uso de `libphonenumber-js`; exige configuração de país padrão  |
-| Merge de duplicatas           | Combinar telefones, e-mails e demais campos em vez de descartar o removido                                      | Depende dos critérios acima                                             |
-| Suporte a mais dados          | Foto, prefixo/sufixo do nome, categorias, campos `X-`, quoted-printable/charsets                                | Ampliar o modelo `Contact` e as fixtures                                |
-| Testes E2E                    | Fluxo completo no navegador (importar → duplicatas → exportar)                                                  | Playwright já é dependência                                             |
-| Exportação em CSV             | Mesmo pipeline de `rows.ts`, outro formato de saída                                                             | Atenção a encoding (UTF-8 com BOM) e separador                          |
-| Caminho inverso (XLSX → VCF)  | Importar planilhas e gerar vCards                                                                               | Exige leitura de XLSX não confiável; reforça o critério de segurança da biblioteca |
+| Item                            | Descrição                                                                        | Observação                                                                         |
+| ------------------------------- | -------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Seleção de colunas              | Escolher quais campos exportar e a ordem                                         | `contactsToRows` já recebe `fields`; falta UI                                      |
+| Deduplicação por e-mail/nome    | Critérios adicionais e configuráveis                                             | Definir como tratar falsos positivos (ex.: homônimos)                              |
+| Normalização com código de país | Tratar `47999999999` e `5547999999999` como o mesmo número                       | Provável uso de `libphonenumber-js`; exige configuração de país padrão             |
+| Merge de duplicatas             | Combinar telefones, e-mails e demais campos em vez de descartar o removido       | Depende dos critérios acima                                                        |
+| Suporte a mais dados            | Foto, prefixo/sufixo do nome, categorias, campos `X-`, quoted-printable/charsets | Ampliar o modelo `Contact` e as fixtures                                           |
+| Testes E2E                      | Fluxo completo no navegador (importar → duplicatas → exportar)                   | Playwright já é dependência                                                        |
+| Exportação em CSV               | Mesmo pipeline de `rows.ts`, outro formato de saída                              | Atenção a encoding (UTF-8 com BOM) e separador                                     |
+| Caminho inverso (XLSX → VCF)    | Importar planilhas e gerar vCards                                                | Exige leitura de XLSX não confiável; reforça o critério de segurança da biblioteca |
 
 ## 5. Arquitetura
 
@@ -206,6 +213,6 @@ Regra de dependência: a UI e o exportador só enxergam `Contact`; nenhum dado b
 
 - [ ] Todos os itens de 3.1 a 3.7 entregues e com seus critérios de aceite verificados.
 - [ ] Decisão sobre `xlsx` vs `exceljs` registrada (3.8) e, se houver troca, aplicada com a suíte de exportação verde.
-- [ ] `pnpm check`, `pnpm lint` e `pnpm test` verdes; audit de produção sem *high*.
+- [ ] `pnpm check`, `pnpm lint` e `pnpm test` verdes; audit de produção sem _high_.
 - [ ] Teste manual com um VCF real de ~10 mil contatos, sem travar a interface.
 - [ ] README publicado e resíduos do template removidos.

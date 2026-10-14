@@ -16,6 +16,8 @@ export default defineConfig({
 			adapter: adapter()
 		})
 	],
+	// Workers como módulos ES: o bundle do worker usa `import` e code splitting.
+	worker: { format: 'es' },
 	test: {
 		expect: { requireAssertions: true },
 		projects: [

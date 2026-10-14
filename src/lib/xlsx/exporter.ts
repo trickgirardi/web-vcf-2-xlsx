@@ -43,16 +43,6 @@ export async function buildExport(
 	}
 }
 
-/** Dispara o download do resultado no navegador (spec, Etapa 11). */
-export function downloadBlob({ fileName, blob }: ExportResult): void {
-	const url = URL.createObjectURL(blob);
-	const anchor = document.createElement('a');
-	anchor.href = url;
-	anchor.download = fileName;
-	anchor.click();
-	URL.revokeObjectURL(url);
-}
-
 // --- Modo A: todos os contatos em uma única sheet -------------------------
 
 async function buildSingleSheetWorkbook(

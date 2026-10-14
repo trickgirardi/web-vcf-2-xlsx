@@ -25,18 +25,25 @@ export interface ParsedVcfFile {
  * Um vCard malformado dentro do arquivo não interrompe os demais: cada
  * bloco `BEGIN:VCARD ... END:VCARD` é parseado isoladamente.
  */
-export function parseVcfFile(source: ContactSource, text: string): ParsedVcfFile {
-	const { cards, errors } = parseVcfText(text);
+export function parseVcfFile(
+	source: ContactSource,
+	text: string,
+	onCardParsed?: CardProgressCallback
+): ParsedVcfFile {
+	const { cards, errors } = parseVcfText(text, onCardParsed);
 	const contacts = cards.map((card) => vcardToContact(card, source));
 	return { contacts, errors };
 }
+
+/** Chamado após cada vCard do arquivo (com sucesso ou não): `done` de `total`. */
+export type CardProgressCallback = (done: number, total: number) => void;
 
 interface VcfParseResult {
 	cards: VCard[];
 	errors: VcfParseError[];
 }
 
-function parseVcfText(text: string): VcfParseResult {
+function parseVcfText(text: string, onCardParsed?: CardProgressCallback): VcfParseResult {
 	const blocks = splitVcardBlocks(normalizeLineEndings(text));
 	const cards: VCard[] = [];
 	const errors: VcfParseError[] = [];
@@ -47,6 +54,7 @@ function parseVcfText(text: string): VcfParseResult {
 		} catch (error) {
 			errors.push({ index, message: error instanceof Error ? error.message : String(error) });
 		}
+		onCardParsed?.(index + 1, blocks.length);
 	});
 
 	return { cards, errors };
