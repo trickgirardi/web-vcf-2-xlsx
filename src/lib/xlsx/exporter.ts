@@ -1,5 +1,5 @@
 import JSZip from 'jszip';
-import * as XLSX from 'xlsx';
+import ExcelJS from 'exceljs';
 import type { Contact } from '$lib/domain/contact/types';
 import { contactsToRows } from './rows';
 import type { ContactField, ExportMode } from './types';
@@ -55,25 +55,31 @@ export function downloadBlob({ fileName, blob }: ExportResult): void {
 
 // --- Modo A: todos os contatos em uma única sheet -------------------------
 
-function buildSingleSheetWorkbook(contacts: Contact[], fields: ContactField[]): ExportResult {
-	const workbook = XLSX.utils.book_new();
-	XLSX.utils.book_append_sheet(workbook, sheetFor(contacts, fields), 'Contatos');
-	return { fileName: 'contatos.xlsx', blob: xlsxBlob(workbookToArrayBuffer(workbook)) };
+async function buildSingleSheetWorkbook(
+	contacts: Contact[],
+	fields: ContactField[]
+): Promise<ExportResult> {
+	const workbook = new ExcelJS.Workbook();
+	addSheet(workbook, 'Contatos', contacts, fields);
+	return { fileName: 'contatos.xlsx', blob: xlsxBlob(await workbookToArrayBuffer(workbook)) };
 }
 
 // --- Modo B: um workbook, uma sheet por arquivo de origem ------------------
 
-function buildSheetPerFileWorkbook(contacts: Contact[], fields: ContactField[]): ExportResult {
-	const workbook = XLSX.utils.book_new();
+async function buildSheetPerFileWorkbook(
+	contacts: Contact[],
+	fields: ContactField[]
+): Promise<ExportResult> {
+	const workbook = new ExcelJS.Workbook();
 	const usedNames = new Set<string>();
 
 	for (const group of groupByFile(contacts)) {
 		const sheetName = uniqueName(sanitizeSheetName(baseName(group.fileName)), 31, usedNames);
 		usedNames.add(sheetName.toLowerCase());
-		XLSX.utils.book_append_sheet(workbook, sheetFor(group.contacts, fields), sheetName);
+		addSheet(workbook, sheetName, group.contacts, fields);
 	}
 
-	return { fileName: 'contatos.xlsx', blob: xlsxBlob(workbookToArrayBuffer(workbook)) };
+	return { fileName: 'contatos.xlsx', blob: xlsxBlob(await workbookToArrayBuffer(workbook)) };
 }
 
 // --- Modo C: um XLSX por arquivo de origem, agrupados em .zip se houver >1 -
@@ -85,22 +91,24 @@ async function buildWorkbookPerFile(
 	const groups = groupByFile(contacts);
 	const usedNames = new Set<string>();
 
-	const files = groups.map((group) => {
-		const workbook = XLSX.utils.book_new();
-		XLSX.utils.book_append_sheet(workbook, sheetFor(group.contacts, fields), 'Contatos');
-		const fileName = uniqueName(
-			`${sanitizeFileName(baseName(group.fileName))}.xlsx`,
-			Infinity,
-			usedNames
-		);
-		usedNames.add(fileName.toLowerCase());
-		return { fileName, data: workbookToArrayBuffer(workbook) };
-	});
+	const files = await Promise.all(
+		groups.map(async (group) => {
+			const workbook = new ExcelJS.Workbook();
+			addSheet(workbook, 'Contatos', group.contacts, fields);
+			const fileName = uniqueName(
+				`${sanitizeFileName(baseName(group.fileName))}.xlsx`,
+				Infinity,
+				usedNames
+			);
+			usedNames.add(fileName.toLowerCase());
+			return { fileName, data: await workbookToArrayBuffer(workbook) };
+		})
+	);
 
 	if (files.length === 0) {
 		return {
 			fileName: 'contatos.xlsx',
-			blob: xlsxBlob(workbookToArrayBuffer(XLSX.utils.book_new()))
+			blob: xlsxBlob(await workbookToArrayBuffer(new ExcelJS.Workbook()))
 		};
 	}
 
@@ -121,13 +129,24 @@ async function buildWorkbookPerFile(
 
 // --- Helpers ----------------------------------------------------------------
 
-function sheetFor(contacts: Contact[], fields: ContactField[]) {
+function addSheet(
+	workbook: ExcelJS.Workbook,
+	name: string,
+	contacts: Contact[],
+	fields: ContactField[]
+) {
 	const { headers, rows } = contactsToRows(contacts, fields);
-	return XLSX.utils.aoa_to_sheet([headers, ...rows]);
+	const sheet = workbook.addWorksheet(name);
+	sheet.addRows([headers, ...rows]);
 }
 
-function workbookToArrayBuffer(workbook: XLSX.WorkBook): ArrayBuffer {
-	return XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
+async function workbookToArrayBuffer(workbook: ExcelJS.Workbook): Promise<ArrayBuffer> {
+	// Os tipos do exceljs declaram `Buffer extends ArrayBuffer`, mas em runtime
+	// `writeBuffer` devolve um Uint8Array (Buffer no Node), possivelmente uma
+	// view sobre um ArrayBuffer maior — copiamos só a fatia relevante.
+	const bytes = (await workbook.xlsx.writeBuffer()) as unknown as Uint8Array;
+	const { buffer, byteOffset, byteLength } = bytes;
+	return buffer.slice(byteOffset, byteOffset + byteLength) as ArrayBuffer;
 }
 
 function xlsxBlob(data: ArrayBuffer): Blob {
