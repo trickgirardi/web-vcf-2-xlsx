@@ -137,12 +137,12 @@ Observações:
 
 **Decisão:** migrar para `exceljs`. É a única opção que zera os *high* do `pnpm audit --prod` exigidos em 3.9 sem depender de tarball fora do npm. O custo é ~1,3x de tempo de geração e +~160 KB gzip no bundle, que carrega uma vez e, com o worker, não bloqueia a UI. Se o custo de bundle incomodar, a alternativa é o tarball oficial da SheetJS. Em ambos os casos a troca fica isolada em [xlsx/](../src/lib/xlsx/).
 
-**Próximos passos da migração:**
+**Migração aplicada (2026-10-14):**
 
-- Substituir [exporter.ts](../src/lib/xlsx/exporter.ts) pela versão `exporter.exceljs.ts` do spike (mesma API, `buildExport` continua assíncrono).
-- Manter `xlsx` como devDependency só nos testes, que leem o arquivo gerado como oráculo independente (ou migrar a leitura nos testes para `exceljs`).
-- Remover `xlsx` das dependências de produção e reexecutar o `pnpm audit --prod`.
-- Validar o carregamento do `exceljs` dentro do Web Worker (3.4).
+- [x] [exporter.ts](../src/lib/xlsx/exporter.ts) agora usa `exceljs` (mesma API; `buildExport` continua assíncrono). A suíte de exportação existente passa sem alterações.
+- [x] `xlsx` saiu das dependências de produção e ficou como devDependency, usado só pelos testes para ler o arquivo gerado (oráculo independente).
+- [x] O `pnpm audit --prod` não reporta mais vulnerabilidades do `xlsx`. Restam *high* em dependências transitivas do SvelteKit/Vite (`devalue`, `source-map-js`), a tratar em 3.9.
+- [ ] Validar o carregamento do `exceljs` dentro do Web Worker (3.4).
 
 ### 3.9 Qualidade mínima da v1
 
